@@ -1,93 +1,149 @@
 const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext("2d");
+const ctx = canvas.getContext('2d');
 
 if (!ctx) {
     console.error("Не удалось получить 2D контекст");
 }
 
-// --- Переменные для нашего "мяча" ---
-let ball = {
-    x: 0,
-    y: 0,
-    radius: 30, // Сделаем его чуть меньше
-    velocityY: 0, // Вертикальная скорость
-    gravity: 1, // Сила гравитации
-    bounce: 0.9,  // Фактор "прыгучести" (0.8 = 80%)
-    color: 'blue'
+// --- Переменные для управления частицами ---
+let particles = [];
+const numParticles = 200;
+const heartScale = 15;
+let mouse = {
+    x: null,
+    y: null,
+    radius: 300
 };
 
-// --- Функция инициализации и изменения размера ---
-// Эта функция будет устанавливать размер холста и
-// размещать мяч в центре при запуске и при изменении окна
-function init() {
-    // Устанавливаем размер canvas (90% окна)
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-
-    // Начальная позиция мяча - центр
-    ball.x = canvas.width / 2;
-    ball.y = canvas.height / 2;
-    ball.velocityY = 0; // Сбрасываем скорость
-
-    console.log("Canvas initialized:", canvas.width, canvas.height);
+// --- Функция для получения координат точек на кривой сердца ---
+function getHeartPoint(t) {
+    const x = 16 * Math.pow(Math.sin(t), 3);
+    const y = -(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t));
+    return { x, y };
 }
 
-// --- Функция для рисования мяча ---
-function drawBall() {
-    ctx.beginPath();
-    ctx.arc(ball.x, ball.y, ball.radius, 0, 2 * Math.PI);
-    ctx.fillStyle = ball.color;
-    ctx.fill();
-    ctx.closePath();
-}
+// --- Класс для отдельной частицы ---
+class Particle {
+    // ИЗМЕНЕНИЕ: Конструктор теперь принимает 't' (угол на кривой сердца)
+    constructor(t) {
+        this.radius = Math.random() * 2 + 1;
+        // this.color = 'hsl(' + (t * 30) + ', 100%, 75%)'; // Цвет зависит от положения на сердце
+        this.color = '#c334345a'; // Цвет зависит от положения на сердце
 
-// --- Главный цикл анимации ---
-function animate() {
-    // 1. Запрашиваем следующий кадр
-    // Это создает плавный цикл
-    requestAnimationFrame(animate);
+        // --- НОВЫЕ СВОЙСТВА ДЛЯ ОРБИТЫ ---
+        this.t = t; // 't' - это параметр кривой, который определяет положение на сердце
+        // Задаем каждой частице случайную скорость и направление движения по орбите
+        this.speed = 0.00000005;
 
-    // 2. Очищаем холст перед новым кадром
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // Целевая позиция (теперь она будет постоянно обновляться)
+        this.target = { x: 0, y: 0 };
 
-    // 3. Обновляем физику
+        // Начальная позиция (случайная, как и раньше)
+        this.x = Math.random() * canvas.width;
+        this.y = Math.random() * canvas.height;
 
-    // Применяем гравитацию к скорости
-    ball.velocityY += ball.gravity;
+        // Скорость
+        this.vx = 0;
+        this.vy = 0;
 
-    // Применяем скорость к позиции
-    ball.y += ball.velocityY;
-
-    // 4. Проверяем коллизию (столкновение) с "полом"
-    // (canvas.height - ball.radius) — это позиция пола
-    if (ball.y + ball.radius > canvas.height) {
-
-        // 1. Ставим мяч ровно на "пол", чтобы он не "провалился"
-        ball.y = canvas.height - ball.radius;
-
-        // 2. Инвертируем скорость (отскок) и применяем затухание (bounce)
-        ball.velocityY = -ball.velocityY * ball.bounce;
-
-        // Если отскок очень маленький, останавливаем мяч
-        if (Math.abs(ball.velocityY) < 1) {
-            ball.velocityY = 0;
-            ball.gravity = 0; // Выключаем гравитацию, чтобы он не "дрожал"
-        } else {
-            ball.gravity = 0.5; // Убедимся, что гравитация включена, если он еще прыгает
-        }
+        // ИЗМЕНЕНИЕ: 'friction' переименовано в 'damping' (демпфирование)
+        // Оно не останавливает частицы полностью, а лишь сглаживает движение.
+        this.damping = 0.95;
+        this.attractionForce = 0.03;
+        this.mouseRepelForce = 15;
     }
 
-    // 5. Рисуем мяч в новой позиции
-    drawBall();
+    // Метод для обновления позиции частицы
+    update() {
+        // --- ГЛАВНОЕ ИЗМЕНЕНИЕ ЛОГИКИ ---
+        // 1. Двигаем нашу цель по контуру сердца
+        this.t += this.speed;
+
+        // 2. Вычисляем новые координаты цели на основе нового 't'
+        const heartPoint = getHeartPoint(this.t);
+        this.target.x = heartPoint.x * heartScale + canvas.width / 2;
+        this.target.y = heartPoint.y * heartScale + canvas.height / 2;
+
+        // --- Логика притяжения и отталкивания остается прежней ---
+        // Она просто будет работать с постоянно движущейся целью
+
+        // Взаимодействие с мышью
+        let dxMouse = this.x - mouse.x;
+        let dyMouse = this.y - mouse.y;
+        let distanceMouse = Math.sqrt(dxMouse * dxMouse + dyMouse * dyMouse);
+
+        if (distanceMouse < mouse.radius) {
+            // Отталкиваемся от мыши
+            let forceDirectionX = dxMouse / distanceMouse;
+            let forceDirectionY = dyMouse / distanceMouse;
+            let force = (mouse.radius - distanceMouse) / mouse.radius;
+            this.vx += forceDirectionX * force * this.mouseRepelForce;
+            this.vy += forceDirectionY * force * this.mouseRepelForce;
+        } else {
+            // Притягиваемся к нашей движущейся целевой точке
+            let dxTarget = this.target.x - this.x;
+            let dyTarget = this.target.y - this.y;
+            this.vx += dxTarget * this.attractionForce;
+            this.vy += dyTarget * this.attractionForce;
+        }
+
+        // Применяем демпфирование
+        this.vx *= this.damping;
+        this.vy *= this.damping;
+
+        // Обновляем позицию
+        this.x += this.vx;
+        this.y += this.vy;
+    }
+
+    // Метод для отрисовки (без изменений)
+    draw() {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
+        ctx.fill();
+    }
 }
 
-// --- Запуск ---
+// --- Функция инициализации ---
+function init() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    particles = [];
 
-// 1. Устанавливаем начальные размеры
+    // ИЗМЕНЕНИЕ: Теперь мы передаем 't' в конструктор частиц
+    for (let i = 0; i < numParticles; i++) {
+        // Мы равномерно распределяем частицы по всей длине кривой сердца
+        const t = (i / numParticles) * 2 * Math.PI;
+        particles.push(new Particle(t));
+    }
+}
+
+// --- Главный цикл анимации (без изменений) ---
+function animate() {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    for (let i = 0; i < particles.length; i++) {
+        particles[i].update();
+        particles[i].draw();
+    }
+
+    requestAnimationFrame(animate);
+}
+
+// --- Запуск и обработчики событий (без изменений) ---
 init();
-
-// 2. Запускаем анимацию
 animate();
 
-// 3. Перерисовываем (сбрасываем) при изменении размера окна
-window.onresize = init;
+window.addEventListener('resize', init);
+
+window.addEventListener('mousemove', function (event) {
+    mouse.x = event.x;
+    mouse.y = event.y;
+});
+
+window.addEventListener('mouseout', function () {
+    mouse.x = null;
+    mouse.y = null;
+});
